@@ -1,0 +1,26 @@
+{
+	"ImportPath": "github.com/krisrang/cirunner",
+	"GoVersion": "go1.5.1",
+	"Packages": [
+		"./..."
+	],
+	"Deps": [
+		{
+			"ImportPath": "github.com/codegangsta/cli",
+			"Comment": "1.2.0-139-g142e6cd",
+			"Rev": "142e6cd241a4dfbf7f07a018f1f8225180018da4"
+		},
+		{
+			"ImportPath": "github.com/cucumber/gherkin-go",
+			"Rev": "9c2deb4f2cf49ff686961e6878265f36425bc2c7"
+		},
+		{
+			"ImportPath": "github.com/pebblescape/pebblescape/pkg/random",
+			"Rev": "b90bf7d9ab999515ed63adbbcde0995f0a6d3b6a"
+		},
+		{
+			"ImportPath": "github.com/pebblescape/pebblescape/pkg/table",
+			"Rev": "b90bf7d9ab999515ed63adbbcde0995f0a6d3b6a"
+		}
+	]
+}
