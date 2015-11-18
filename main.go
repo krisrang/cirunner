@@ -277,15 +277,19 @@ func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, bui
 	dbcnt := fmt.Sprintf("%s-db", runcnt)
 	rediscnt := fmt.Sprintf("%s-redis", runcnt)
 
-	defer runCmd("docker", "rm", "-f", runcnt, migratecnt, dbcnt, rediscnt)
+	defer func() {
+		runCmd("docker", "rm", "-f", runcnt, migratecnt, dbcnt, rediscnt)
+		wg.Done()
+	}()
+
 	runCmd("docker", "rm", "-f", runcnt, migratecnt, dbcnt, rediscnt)
 
 	if err, stdout, stderr := runCmd("docker", "run", "-d", "--name", dbcnt, "-e", "MYSQL_ROOT_PASSWORD=jenkins", "mariadb:latest"); err != nil {
-		setResult(wg, results, true, s.run, fmt.Sprintf("Starting DB failed: %v", err), start, stdout, stderr)
+		setResult(results, true, s.run, fmt.Sprintf("Starting DB failed: %v", err), start, stdout, stderr)
 		return
 	}
 	if err, stdout, stderr := runCmd("docker", "run", "-d", "--name", rediscnt, "redis"); err != nil {
-		setResult(wg, results, true, s.run, fmt.Sprintf("Starting redis failed: %v", err), start, stdout, stderr)
+		setResult(results, true, s.run, fmt.Sprintf("Starting redis failed: %v", err), start, stdout, stderr)
 		return
 	}
 
@@ -297,7 +301,7 @@ func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, bui
 		"--link", dbcnt+":db", "--link", rediscnt+":redis",
 		buildname,
 		"sh", "-c", "./bin/rake db:create db:schema:load db:migrate"); err != nil {
-		setResult(wg, results, false, s.run, fmt.Sprintf("Setting up DB failed: %v", err), start, stdout, stderr)
+		setResult(results, false, s.run, fmt.Sprintf("Setting up DB failed: %v", err), start, stdout, stderr)
 		return
 	}
 
@@ -323,16 +327,16 @@ func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, bui
 		msg(fmt.Sprintf("Run %v failed, commiting as %v", s.run, runcnt))
 
 		runCmd("docker", "commit", runcnt, runcnt)
-		setResult(wg, results, false, s.run, "Run failed", start, stdout, stderr)
+		setResult(results, false, s.run, "Run failed", start, stdout, stderr)
 		return
 	}
 
 	msg(fmt.Sprintf("Run %v succeded", s.run))
-	setResult(wg, results, true, s.run, "", start, stdout, stderr)
+	setResult(results, true, s.run, "", start, stdout, stderr)
 }
 
 // Register run result
-func setResult(wg *sync.WaitGroup, results *RunResults, success bool, run, comment string, start time.Time, stdout, stderr bytes.Buffer) {
+func setResult(results *RunResults, success bool, run, comment string, start time.Time, stdout, stderr bytes.Buffer) {
 	duration := time.Since(start)
 
 	results.Lock()
@@ -346,8 +350,6 @@ func setResult(wg *sync.WaitGroup, results *RunResults, success bool, run, comme
 		stdout:   stdout,
 		stderr:   stderr,
 	})
-
-	wg.Done()
 }
 
 func runCmd(name string, args ...string) (error, bytes.Buffer, bytes.Buffer) {
