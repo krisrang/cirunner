@@ -3,6 +3,7 @@ package cucumber
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/krisrang/cirunner/Godeps/_workspace/src/github.com/cucumber/gherkin-go"
@@ -18,7 +19,7 @@ type ByWeight []FeatureFile
 
 func (a ByWeight) Len() int           { return len(a) }
 func (a ByWeight) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a ByWeight) Less(i, j int) bool { return a[i].Weight < a[j].Weight }
+func (a ByWeight) Less(i, j int) bool { return a[i].Weight > a[j].Weight }
 
 type Tags struct {
 	SelectTags []string
@@ -109,6 +110,8 @@ func Select(tags Tags) ([]FeatureFile, error) {
 			})
 		}
 	}
+
+	sort.Sort(ByWeight(features))
 
 	return features, nil
 }
