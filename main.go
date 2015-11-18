@@ -330,7 +330,9 @@ func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, bui
 func setResult(results *RunResults, success bool, run, comment string, start time.Time, stdout, stderr bytes.Buffer) {
 	duration := time.Since(start)
 
-	fail(run, stdout, stderr)
+	if !success {
+		fail(run, stdout, stderr)
+	}
 
 	results.Lock()
 	defer results.Unlock()
