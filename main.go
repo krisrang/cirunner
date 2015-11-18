@@ -214,7 +214,7 @@ func run(c *cli.Context) {
 	sort.Sort(RunResults(*results))
 	success := true
 	resultTbl := table.New(4)
-	resultTbl.Add("Run", "Success", "Duration", "Comment")
+	resultTbl.Add("RUN", "SUCCESS", "DURATION", "")
 
 	for _, r := range results.results {
 		if !r.success {
@@ -222,19 +222,6 @@ func run(c *cli.Context) {
 		}
 
 		resultTbl.Add(r.run, strconv.FormatBool(r.success), formatDuration(r.duration), r.comment)
-	}
-
-	if !success {
-		topic("Fail logs")
-		for _, r := range results.results {
-			if !r.success {
-				msg(fmt.Sprintf("Run %v stdout:", r.run))
-				fmt.Print(r.stdout.String())
-
-				msg(fmt.Sprintf("Run %v stderr:", r.run))
-				fmt.Print(r.stderr.String())
-			}
-		}
 	}
 
 	topic("Results")
@@ -273,17 +260,17 @@ func splitFeatures(runs int, feat []cucumber.FeatureFile) map[int]Split {
 func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, buildid, reportSrc, reportDest string, cmd ...string) {
 	start := time.Now()
 	runcnt := fmt.Sprintf("%s-%s-%s", buildname, buildid, s.run)
-	migratecnt := fmt.Sprintf("%s-prep", runcnt)
 	dbcnt := fmt.Sprintf("%s-db", runcnt)
 	rediscnt := fmt.Sprintf("%s-redis", runcnt)
 
 	defer func() {
-		runCmd("docker", "rm", "-f", runcnt, migratecnt, dbcnt, rediscnt)
+		runCmd("docker", "rm", "-f", runcnt, dbcnt, rediscnt)
 		wg.Done()
 	}()
 
-	runCmd("docker", "rm", "-f", runcnt, migratecnt, dbcnt, rediscnt)
+	runCmd("docker", "rm", "-f", runcnt, dbcnt, rediscnt)
 
+	// Spin up mariadb and redis
 	if err, stdout, stderr := runCmd("docker", "run", "-d", "--name", dbcnt, "-e", "MYSQL_ROOT_PASSWORD=jenkins", "mariadb:latest"); err != nil {
 		setResult(results, true, s.run, fmt.Sprintf("Starting DB failed: %v", err), start, stdout, stderr)
 		return
@@ -296,7 +283,8 @@ func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, bui
 	// Wait for DB to boot
 	time.Sleep(5 * time.Second)
 
-	if err, stdout, stderr := runCmd("docker", "run", "--name", migratecnt,
+	// Load up database schema and migrate
+	if err, stdout, stderr := runCmd("docker", "run", "--rm",
 		"-e", "RAILS_ENV=test",
 		"--link", dbcnt+":db", "--link", rediscnt+":redis",
 		buildname,
@@ -318,11 +306,14 @@ func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, bui
 		buildname,
 	}
 
+	// TESTS! (=^ェ^=)
 	err, stdout, stderr := runCmd("docker", append(baseCmd, cmd...)...)
 
+	// Copy reports from container
 	os.MkdirAll(reportDest, 0777)
 	runCmd("docker", "cp", runcnt+":/app/"+reportSrc, reportDest)
 
+	// Failed, commit the evidence!
 	if err != nil {
 		msg(fmt.Sprintf("Run %v failed, commiting as %v", s.run, runcnt))
 
@@ -338,6 +329,8 @@ func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, bui
 // Register run result
 func setResult(results *RunResults, success bool, run, comment string, start time.Time, stdout, stderr bytes.Buffer) {
 	duration := time.Since(start)
+
+	fail(run, stdout, stderr)
 
 	results.Lock()
 	defer results.Unlock()
@@ -368,6 +361,14 @@ func runCmd(name string, args ...string) (error, bytes.Buffer, bytes.Buffer) {
 	}
 
 	return cmd.Run(), outBuf, errBuf
+}
+
+func fail(run string, stdout, stderr bytes.Buffer) {
+	msg(fmt.Sprintf("Run %v stdout:", run))
+	fmt.Print(stdout.String())
+
+	msg(fmt.Sprintf("Run %v stderr:", run))
+	fmt.Print(stderr.String())
 }
 
 func formatDuration(d time.Duration) string {
