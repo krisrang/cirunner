@@ -278,7 +278,7 @@ func splitFeatures(runs int, feat []cucumber.FeatureFile) map[int]Split {
 func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, buildid, reportSrc, reportDest, dbcnt string, cmd ...string) {
 	start := time.Now()
 	runcnt := fmt.Sprintf("%s-%s-%s", buildname, buildid, s.run)
-	dbname := fmt.Sprintf("%s_%s_%s_test", buildname, buildid, s.run)
+	dbname := strings.Replace(fmt.Sprintf("%s_%s_%s_test", buildname, buildid, s.run), "-", "_", -1)
 	rediscnt := fmt.Sprintf("%s-redis", runcnt)
 
 	defer func() {
