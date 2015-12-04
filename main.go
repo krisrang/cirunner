@@ -157,6 +157,16 @@ func run(c *cli.Context) {
 	splits := splitFeatures(runs, features)
 	runs = len(splits)
 
+	topic("Starting database")
+	dbcnt := fmt.Sprintf("%s-%s-db", buildname, buildid)
+	runCmd("docker", "rm", "-f", dbcnt)
+	if err, stdout, stderr := runCmd("docker", "run", "-d", "--name", dbcnt, "-e", "MYSQL_ROOT_PASSWORD=jenkins", "mariadb:latest"); err != nil {
+		log.Fatal(fmt.Errorf("Starting DB failed: %v\n%s\n%s", err, stdout, stderr))
+	}
+
+	// Wait for DB to boot
+	time.Sleep(10 * time.Second)
+
 	// Run build
 	topic(fmt.Sprintf("Running build in %v runs + rspec run", runs))
 	results := &RunResults{
@@ -177,7 +187,7 @@ func run(c *cli.Context) {
 		"--out", "spec/reports/rspec.xml",
 		"--color", "--no-drb",
 	}
-	go processRun(&wg, results, rspecSplit, buildname, buildid, "spec/reports", "spec", cmd...)
+	go processRun(&wg, results, rspecSplit, buildname, buildid, "spec/reports", "spec", dbcnt, cmd...)
 
 	// Run features
 	for _, s := range splits {
@@ -204,7 +214,7 @@ func run(c *cli.Context) {
 			cmd = append(cmd, f.Path)
 		}
 
-		go processRun(&wg, results, s, buildname, buildid, "features/reports", "features/reports/"+s.run, cmd...)
+		go processRun(&wg, results, s, buildname, buildid, "features/reports", "features/reports/"+s.run, dbcnt, cmd...)
 	}
 
 	// Wait for runs to finish
@@ -227,10 +237,16 @@ func run(c *cli.Context) {
 	topic("Results")
 	fmt.Print(resultTbl.String())
 
-	if success {
-		os.Exit(0)
+	if !success {
+		os.Exit(cleanup(dbcnt, 1))
 	}
-	os.Exit(1)
+	os.Exit(cleanup(dbcnt, 0))
+}
+
+func cleanup(dbcnt string, code int) int {
+	defer runCmd("docker", "rm", "-f", dbcnt)
+
+	return code
 }
 
 func splitFeatures(runs int, feat []cucumber.FeatureFile) map[int]Split {
@@ -257,39 +273,40 @@ func splitFeatures(runs int, feat []cucumber.FeatureFile) map[int]Split {
 	return result
 }
 
-func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, buildid, reportSrc, reportDest string, cmd ...string) {
+func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, buildid, reportSrc, reportDest, dbcnt string, cmd ...string) {
 	start := time.Now()
 	runcnt := fmt.Sprintf("%s-%s-%s", buildname, buildid, s.run)
-	dbcnt := fmt.Sprintf("%s-db", runcnt)
+	dbname := fmt.Sprintf("%s_%s_%s_test", buildname, buildid, s.run)
 	rediscnt := fmt.Sprintf("%s-redis", runcnt)
 
 	defer func() {
-		runCmd("docker", "rm", "-f", runcnt, dbcnt, rediscnt)
+		runCmd("docker", "rm", "-f", runcnt, rediscnt)
 		wg.Done()
 	}()
 
-	runCmd("docker", "rm", "-f", runcnt, dbcnt, rediscnt)
+	runCmd("docker", "rm", "-f", runcnt, rediscnt)
 
-	// Spin up mariadb and redis
-	if err, stdout, stderr := runCmd("docker", "run", "-d", "--name", dbcnt, "-e", "MYSQL_ROOT_PASSWORD=jenkins", "mariadb:latest"); err != nil {
-		setResult(results, true, s.run, fmt.Sprintf("Starting DB failed: %v", err), start, stdout, stderr)
-		return
-	}
+	// Spin up redis
 	if err, stdout, stderr := runCmd("docker", "run", "-d", "--name", rediscnt, "redis"); err != nil {
 		setResult(results, true, s.run, fmt.Sprintf("Starting redis failed: %v", err), start, stdout, stderr)
 		return
 	}
 
-	// Wait for DB to boot
-	time.Sleep(5 * time.Second)
-
 	// Load up database schema and migrate
 	if err, stdout, stderr := runCmd("docker", "run", "--rm",
+		"--link", dbcnt+":db",
+		"mariadb:latest",
+		"mysqladmin", "-h", "db", "-uroot", "-pjenkins", "create", dbname); err != nil {
+		setResult(results, false, s.run, fmt.Sprintf("Creating DB failed: %v", err), start, stdout, stderr)
+		return
+	}
+	if err, stdout, stderr := runCmd("docker", "run", "--rm",
 		"-e", "RAILS_ENV=test",
+		"-e", "DBNAME="+dbname,
 		"--link", dbcnt+":db", "--link", rediscnt+":redis",
 		buildname,
-		"sh", "-c", "./bin/rake db:create db:schema:load db:migrate"); err != nil {
-		setResult(results, false, s.run, fmt.Sprintf("Setting up DB failed: %v", err), start, stdout, stderr)
+		"sh", "-c", "./bin/rake db:schema:load db:migrate"); err != nil {
+		setResult(results, false, s.run, fmt.Sprintf("Migrating DB failed: %v", err), start, stdout, stderr)
 		return
 	}
 
@@ -299,6 +316,8 @@ func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, bui
 		runcnt,
 		"-e",
 		"RAILS_ENV=test",
+		"-e",
+		"DBNAME=" + dbname,
 		"--link",
 		dbcnt + ":db",
 		"--link",
