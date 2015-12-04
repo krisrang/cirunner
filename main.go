@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -25,6 +26,7 @@ import (
 
 var (
 	verbose = false
+	commit  = false
 )
 
 type Split struct {
@@ -87,6 +89,10 @@ func main() {
 			Name:  "verbose, vv",
 			Usage: "verbose logging",
 		},
+		cli.BoolFlag{
+			Name:  "commit",
+			Usage: "commit run on failure",
+		},
 		cli.IntFlag{
 			Name:  "maxruns",
 			Value: 0,
@@ -104,6 +110,7 @@ func run(c *cli.Context) {
 	slowTags := c.GlobalStringSlice("slowtags")
 	runs := c.GlobalInt("maxruns")
 	verbose = c.GlobalBool("verbose")
+	commit = c.GlobalBool("commit")
 
 	if buildname == "" {
 		log.Fatal("Must specify build name")
@@ -133,11 +140,9 @@ func run(c *cli.Context) {
 	os.RemoveAll("features/reports")
 
 	topic("Building base image")
-	out, err := pipeCmd("docker", "build", "-t", buildname, ".")
-	if err != nil {
+	if err, _, _ := runCmd("docker", "build", "-t", buildname, "."); err != nil {
 		log.Fatal(err)
 	}
-	fmtOut(out)
 
 	topic("Selecting features")
 	tags := cucumber.ParseTags(tagArgs, slowTags)
@@ -168,6 +173,32 @@ func run(c *cli.Context) {
 
 	// Wait for DB to boot
 	time.Sleep(10 * time.Second)
+
+	// Cleanup all containers on interrupt
+	go func() {
+		sigchan := make(chan os.Signal, 10)
+		signal.Notify(sigchan, os.Interrupt)
+		<-sigchan
+		log.Println("CI runner killed !")
+
+		cmd := []string{
+			"rm",
+			"-f",
+			dbcnt,
+		}
+
+		for _, s := range splits {
+			cmd = append(cmd, fmt.Sprintf("%s-%s-%s", buildname, buildid, s.run))
+			cmd = append(cmd, fmt.Sprintf("%s-%s-%s-redis", buildname, buildid, s.run))
+		}
+
+		cmd = append(cmd, fmt.Sprintf("%s-%s-%s", buildname, buildid, "rspec"))
+		cmd = append(cmd, fmt.Sprintf("%s-%s-%s-redis", buildname, buildid, "rspec"))
+
+		runCmd("docker", cmd...)
+
+		os.Exit(1)
+	}()
 
 	// Run build
 	topic(fmt.Sprintf("Running build in %v runs + rspec run", runs))
@@ -296,18 +327,11 @@ func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, bui
 
 	// Load up database schema and migrate
 	if err, stdout, stderr := runCmd("docker", "run", "--rm",
-		"--link", dbcnt+":db",
-		"mariadb:latest",
-		"sh", "-c", "echo \"CREATE DATABASE "+dbname+" DEFAULT CHARACTER SET utf8\" | mysql -h db -uroot -pjenkins"); err != nil {
-		setResult(results, false, s.run, fmt.Sprintf("Creating DB failed: %v", err), start, stdout, stderr)
-		return
-	}
-	if err, stdout, stderr := runCmd("docker", "run", "--rm",
 		"-e", "RAILS_ENV=test",
 		"-e", "DBNAME="+dbname,
 		"--link", dbcnt+":db", "--link", rediscnt+":redis",
 		buildname,
-		"sh", "-c", "./bin/rake db:schema:load db:migrate"); err != nil {
+		"sh", "-c", "bundle exec rake db:create db:schema:load db:migrate"); err != nil {
 		setResult(results, false, s.run, fmt.Sprintf("Migrating DB failed: %v", err), start, stdout, stderr)
 		return
 	}
@@ -336,9 +360,13 @@ func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, bui
 
 	// Failed, commit the evidence!
 	if err != nil {
-		msg(fmt.Sprintf("Run %v failed, commiting as %v", s.run, runcnt))
+		if commit {
+			msg(fmt.Sprintf("Run %v failed, commiting as %v", s.run, runcnt))
 
-		runCmd("docker", "commit", runcnt, runcnt)
+			runCmd("docker", "commit", runcnt, runcnt)
+		} else {
+			msg(fmt.Sprintf("Run %v failed", s.run))
+		}
 		setResult(results, false, s.run, "Run failed", start, stdout, stderr)
 		return
 	}
