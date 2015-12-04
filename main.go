@@ -133,9 +133,11 @@ func run(c *cli.Context) {
 	os.RemoveAll("features/reports")
 
 	topic("Building base image")
-	if err, _, _ := runCmd("docker", "build", "-t", buildname, "."); err != nil {
+	out, err := pipeCmd("docker", "build", "-t", buildname, ".")
+	if err != nil {
 		log.Fatal(err)
 	}
+	fmtOut(out)
 
 	topic("Selecting features")
 	tags := cucumber.ParseTags(tagArgs, slowTags)
@@ -296,7 +298,7 @@ func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, bui
 	if err, stdout, stderr := runCmd("docker", "run", "--rm",
 		"--link", dbcnt+":db",
 		"mariadb:latest",
-		"mysqladmin", "-h", "db", "-uroot", "-pjenkins", "create", dbname); err != nil {
+		"sh", "-c", "echo \"CREATE DATABASE "+dbname+" DEFAULT CHARACTER SET utf8\" | mysql -h db -uroot -pjenkins"); err != nil {
 		setResult(results, false, s.run, fmt.Sprintf("Creating DB failed: %v", err), start, stdout, stderr)
 		return
 	}
@@ -382,6 +384,24 @@ func runCmd(name string, args ...string) (error, bytes.Buffer, bytes.Buffer) {
 	}
 
 	return cmd.Run(), outBuf, errBuf
+}
+
+func pipeCmd(name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+
+	if verbose {
+		fmt.Printf("Running %v %v\n", name, args)
+	}
+
+	return cmd.CombinedOutput()
+}
+
+func fmtOut(out []byte) {
+	output := string(out)
+
+	for _, line := range strings.Split(output, "\n") {
+		msg(strings.Trim(line, " "))
+	}
 }
 
 func fail(run string, stdout, stderr bytes.Buffer) {
