@@ -55,7 +55,7 @@ func (a RunResults) Less(i, j int) bool { return a.results[i].run < a.results[j]
 func main() {
 	app := cli.NewApp()
 	app.Name = "cirunner"
-	app.Version = "0.2.0"
+	app.Version = "0.2.1"
 	app.Action = run
 	app.Flags = []cli.Flag{
 		cli.StringFlag{
@@ -166,7 +166,7 @@ func run(c *cli.Context) {
 
 	topic("Starting database")
 	dbcnt := fmt.Sprintf("%s-%s-db", buildname, buildid)
-	runCmd("docker", "rm", "-f", dbcnt)
+	runCmd("docker", "rm", "-f", "-v", dbcnt)
 	if err, stdout, stderr := runCmd("docker", "run", "-d", "--name", dbcnt, "-e", "MYSQL_ROOT_PASSWORD=jenkins", "mariadb:latest"); err != nil {
 		log.Fatal(fmt.Errorf("Starting DB failed: %v\n%s\n%s", err, stdout, stderr))
 	}
@@ -184,6 +184,7 @@ func run(c *cli.Context) {
 		cmd := []string{
 			"rm",
 			"-f",
+			"-v",
 			dbcnt,
 		}
 
@@ -277,7 +278,7 @@ func run(c *cli.Context) {
 }
 
 func cleanup(dbcnt string, code int) int {
-	defer runCmd("docker", "rm", "-f", dbcnt)
+	defer runCmd("docker", "rm", "-f", "-v", dbcnt)
 
 	return code
 }
@@ -313,11 +314,11 @@ func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, bui
 	rediscnt := fmt.Sprintf("%s-redis", runcnt)
 
 	defer func() {
-		runCmd("docker", "rm", "-f", runcnt, rediscnt)
+		runCmd("docker", "rm", "-f", "-v", runcnt, rediscnt)
 		wg.Done()
 	}()
 
-	runCmd("docker", "rm", "-f", runcnt, rediscnt)
+	runCmd("docker", "rm", "-f", "-v", runcnt, rediscnt)
 
 	// Spin up redis
 	if err, stdout, stderr := runCmd("docker", "run", "-d", "--name", rediscnt, "redis"); err != nil {
