@@ -25,8 +25,9 @@ import (
 )
 
 var (
-	verbose = false
-	commit  = false
+	verbose     = false
+	veryverbose = false
+	commit      = false
 )
 
 type Split struct {
@@ -90,6 +91,10 @@ func main() {
 			Usage: "verbose logging",
 		},
 		cli.BoolFlag{
+			Name:  "veryverbose, vvv",
+			Usage: "very verbose logging",
+		},
+		cli.BoolFlag{
 			Name:  "commit",
 			Usage: "commit run on failure",
 		},
@@ -110,6 +115,7 @@ func run(c *cli.Context) {
 	slowTags := c.GlobalStringSlice("slowtags")
 	runs := c.GlobalInt("maxruns")
 	verbose = c.GlobalBool("verbose")
+	veryverbose = c.GlobalBool("veryverbose")
 	commit = c.GlobalBool("commit")
 
 	if buildname == "" {
@@ -140,7 +146,7 @@ func run(c *cli.Context) {
 	os.RemoveAll("features/reports")
 
 	topic("Building base image")
-	if err, _, _ := runCmd("docker", "build", "-t", buildname, "."); err != nil {
+	if err, _, _ := runCmd(veryverbose, "docker", "build", "-t", buildname, "."); err != nil {
 		log.Fatal(err)
 	}
 
@@ -166,8 +172,8 @@ func run(c *cli.Context) {
 
 	topic("Starting database")
 	dbcnt := fmt.Sprintf("%s-%s-db", buildname, buildid)
-	runCmd("docker", "rm", "-f", "-v", dbcnt)
-	if err, stdout, stderr := runCmd("docker", "run", "-d", "--name", dbcnt, "-e", "MYSQL_ROOT_PASSWORD=jenkins", "mariadb:latest"); err != nil {
+	runCmd(veryverbose, "docker", "rm", "-f", "-v", dbcnt)
+	if err, stdout, stderr := runCmd(veryverbose, "docker", "run", "-d", "--name", dbcnt, "-e", "MYSQL_ROOT_PASSWORD=jenkins", "mariadb:latest"); err != nil {
 		log.Fatal(fmt.Errorf("Starting DB failed: %v\n%s\n%s", err, stdout, stderr))
 	}
 
@@ -196,7 +202,7 @@ func run(c *cli.Context) {
 		cmd = append(cmd, fmt.Sprintf("%s-%s-%s", buildname, buildid, "rspec"))
 		cmd = append(cmd, fmt.Sprintf("%s-%s-%s-redis", buildname, buildid, "rspec"))
 
-		runCmd("docker", cmd...)
+		runCmd(veryverbose, "docker", cmd...)
 
 		os.Exit(1)
 	}()
@@ -278,7 +284,7 @@ func run(c *cli.Context) {
 }
 
 func cleanup(dbcnt string, code int) int {
-	defer runCmd("docker", "rm", "-f", "-v", dbcnt)
+	defer runCmd(veryverbose, "docker", "rm", "-f", "-v", dbcnt)
 
 	return code
 }
@@ -314,20 +320,20 @@ func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, bui
 	rediscnt := fmt.Sprintf("%s-redis", runcnt)
 
 	defer func() {
-		runCmd("docker", "rm", "-f", "-v", runcnt, rediscnt)
+		runCmd(veryverbose, "docker", "rm", "-f", "-v", runcnt, rediscnt)
 		wg.Done()
 	}()
 
-	runCmd("docker", "rm", "-f", "-v", runcnt, rediscnt)
+	runCmd(veryverbose, "docker", "rm", "-f", "-v", runcnt, rediscnt)
 
 	// Spin up redis
-	if err, stdout, stderr := runCmd("docker", "run", "-d", "--name", rediscnt, "redis"); err != nil {
+	if err, stdout, stderr := runCmd(veryverbose, "docker", "run", "-d", "--name", rediscnt, "redis"); err != nil {
 		setResult(results, true, s.run, fmt.Sprintf("Starting redis failed: %v", err), start, stdout, stderr)
 		return
 	}
 
 	// Load up database schema and migrate
-	if err, stdout, stderr := runCmd("docker", "run", "--rm",
+	if err, stdout, stderr := runCmd(verbose, "docker", "run", "--rm",
 		"-e", "RAILS_ENV=test",
 		"-e", "DBNAME="+dbname,
 		"--link", dbcnt+":db", "--link", rediscnt+":redis",
@@ -353,18 +359,18 @@ func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, bui
 	}
 
 	// TESTS! (=^ェ^=)
-	err, stdout, stderr := runCmd("docker", append(baseCmd, cmd...)...)
+	err, stdout, stderr := runCmd(verbose, "docker", append(baseCmd, cmd...)...)
 
 	// Copy reports from container
 	os.MkdirAll(reportDest, 0777)
-	runCmd("docker", "cp", runcnt+":/app/"+reportSrc, reportDest)
+	runCmd(veryverbose, "docker", "cp", runcnt+":/app/"+reportSrc, reportDest)
 
 	// Failed, commit the evidence!
 	if err != nil {
 		if commit {
 			msg(fmt.Sprintf("Run %v failed, commiting as %v", s.run, runcnt))
 
-			runCmd("docker", "commit", runcnt, runcnt)
+			runCmd(veryverbose, "docker", "commit", runcnt, runcnt)
 		} else {
 			msg(fmt.Sprintf("Run %v failed", s.run))
 		}
@@ -397,13 +403,13 @@ func setResult(results *RunResults, success bool, run, comment string, start tim
 	})
 }
 
-func runCmd(name string, args ...string) (error, bytes.Buffer, bytes.Buffer) {
+func runCmd(pipe bool, name string, args ...string) (error, bytes.Buffer, bytes.Buffer) {
 	var outBuf bytes.Buffer
 	var errBuf bytes.Buffer
 
 	cmd := exec.Command(name, args...)
 
-	if verbose {
+	if pipe {
 		fmt.Printf("Running %v %v\n", name, args)
 		cmd.Stdout = io.MultiWriter(bufio.NewWriter(&outBuf), os.Stdout)
 		cmd.Stderr = io.MultiWriter(bufio.NewWriter(&errBuf), os.Stderr)
@@ -413,16 +419,6 @@ func runCmd(name string, args ...string) (error, bytes.Buffer, bytes.Buffer) {
 	}
 
 	return cmd.Run(), outBuf, errBuf
-}
-
-func pipeCmd(name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
-
-	if verbose {
-		fmt.Printf("Running %v %v\n", name, args)
-	}
-
-	return cmd.CombinedOutput()
 }
 
 func fmtOut(out []byte) {
