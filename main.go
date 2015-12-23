@@ -338,7 +338,7 @@ func processRun(wg *sync.WaitGroup, results *RunResults, s Split, buildname, bui
 		"-e", "DBNAME="+dbname,
 		"--link", dbcnt+":db", "--link", rediscnt+":redis",
 		buildname,
-		"sh", "-c", "bundle exec rake db:create db:schema:load db:migrate"); err != nil {
+		"bundle", "exec", "rake", "db:create", "db:schema:load", "db:migrate"); err != nil {
 		setResult(results, false, s.run, fmt.Sprintf("Migrating DB failed: %v", err), start, stdout, stderr)
 		return
 	}
