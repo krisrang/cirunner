@@ -56,7 +56,7 @@ func (a RunResults) Less(i, j int) bool { return a.results[i].run < a.results[j]
 func main() {
 	app := cli.NewApp()
 	app.Name = "cirunner"
-	app.Version = "0.2.2"
+	app.Version = "0.2.3"
 	app.Action = run
 	app.Flags = []cli.Flag{
 		cli.StringFlag{
